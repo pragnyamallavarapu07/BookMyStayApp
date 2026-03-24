@@ -1,16 +1,11 @@
 import java.util.*;
 
-/**
- * Reservation class
- * Represents a booking request from a guest.
- * @version 6.0
- */
-class Reservation {
-
+// Booking Request
+class BookingRequest {
     private String guestName;
     private String roomType;
 
-    public Reservation(String guestName, String roomType) {
+    public BookingRequest(String guestName, String roomType) {
         this.guestName = guestName;
         this.roomType = roomType;
     }
@@ -24,164 +19,137 @@ class Reservation {
     }
 }
 
-/**
- * RoomInventory
- * Manages available room counts.
- * @version 6.0
- */
+// Thread-safe Room Inventory
 class RoomInventory {
-
-    private HashMap<String, Integer> inventory = new HashMap<>();
+    private Map<String, Integer> rooms;
 
     public RoomInventory() {
-        inventory.put("Single Room", 2);
-        inventory.put("Double Room", 1);
-        inventory.put("Suite Room", 1);
+        rooms = new HashMap<>();
+        rooms.put("Single", 2);
+        rooms.put("Double", 2);
+        rooms.put("Suite", 1);
     }
 
-    public int getAvailability(String roomType) {
-        return inventory.getOrDefault(roomType, 0);
+    // Critical Section (synchronized)
+    public synchronized boolean allocateRoom(String roomType) {
+        int available = rooms.getOrDefault(roomType, 0);
+
+        if (available > 0) {
+            rooms.put(roomType, available - 1);
+            return true;
+        }
+        return false;
     }
 
-    public void decrementRoom(String roomType) {
-        int count = inventory.get(roomType);
-        inventory.put(roomType, count - 1);
-    }
-
-    public void displayInventory() {
-        System.out.println("\nCurrent Inventory:");
-        for (String type : inventory.keySet()) {
-            System.out.println(type + " : " + inventory.get(type));
+    public synchronized void display() {
+        System.out.println("\nFinal Inventory:");
+        for (String type : rooms.keySet()) {
+            System.out.println(type + ": " + rooms.get(type));
         }
     }
 }
 
-/**
- * BookingRequestQueue
- * Stores booking requests in FIFO order.
- * @version 6.0
- */
-class BookingRequestQueue {
+// Shared Booking Queue
+class BookingQueue {
+    private Queue<BookingRequest> queue = new LinkedList<>();
 
-    private Queue<Reservation> queue = new LinkedList<>();
-
-    public void addRequest(Reservation r) {
-        queue.offer(r);
-        System.out.println("Booking request received from " + r.getGuestName());
+    public synchronized void addRequest(BookingRequest request) {
+        queue.add(request);
     }
 
-    public Reservation getNextRequest() {
+    public synchronized BookingRequest getRequest() {
         return queue.poll();
-    }
-
-    public boolean isEmpty() {
-        return queue.isEmpty();
     }
 }
 
-/**
- * BookingService
- * Processes booking requests and allocates rooms.
- * @version 6.0
- */
-class BookingService {
+// Booking Processor (Thread)
+class BookingProcessor extends Thread {
 
+    private BookingQueue queue;
     private RoomInventory inventory;
 
-    // Track allocated rooms per type
-    private HashMap<String, Set<String>> allocatedRooms = new HashMap<>();
-
-    // Track all room IDs to prevent duplicates
-    private Set<String> usedRoomIds = new HashSet<>();
-
-    public BookingService(RoomInventory inventory) {
+    public BookingProcessor(String name, BookingQueue queue, RoomInventory inventory) {
+        super(name);
+        this.queue = queue;
         this.inventory = inventory;
     }
 
-    /**
-     * Generate unique room ID
-     */
-    private String generateRoomId(String roomType) {
+    @Override
+    public void run() {
+        while (true) {
+            BookingRequest request;
 
-        String prefix = roomType.replace(" ", "").substring(0, 3).toUpperCase();
-        String roomId;
+            // Critical Section: safely get request
+            synchronized (queue) {
+                request = queue.getRequest();
+            }
 
-        do {
-            roomId = prefix + "-" + (100 + new Random().nextInt(900));
-        } while (usedRoomIds.contains(roomId));
+            if (request == null) {
+                break;
+            }
 
-        usedRoomIds.add(roomId);
-        return roomId;
-    }
+            boolean success;
 
-    /**
-     * Process booking request
-     */
-    public void processReservation(Reservation r) {
+            // Critical Section: allocate room safely
+            synchronized (inventory) {
+                success = inventory.allocateRoom(request.getRoomType());
+            }
 
-        String roomType = r.getRoomType();
+            if (success) {
+                System.out.println(getName() + " booked " +
+                        request.getRoomType() + " for " + request.getGuestName());
+            } else {
+                System.out.println(getName() + " failed booking for " +
+                        request.getGuestName() + " (No rooms available)");
+            }
 
-        if (inventory.getAvailability(roomType) <= 0) {
-            System.out.println("Reservation FAILED for " + r.getGuestName() +
-                    " (No available " + roomType + ")");
-            return;
-        }
-
-        String roomId = generateRoomId(roomType);
-
-        allocatedRooms.putIfAbsent(roomType, new HashSet<>());
-        allocatedRooms.get(roomType).add(roomId);
-
-        inventory.decrementRoom(roomType);
-
-        System.out.println("Reservation CONFIRMED");
-        System.out.println("Guest: " + r.getGuestName());
-        System.out.println("Room Type: " + roomType);
-        System.out.println("Assigned Room ID: " + roomId);
-        System.out.println("--------------------------------");
-    }
-
-    public void displayAllocations() {
-
-        System.out.println("\nAllocated Rooms:");
-
-        for (String type : allocatedRooms.keySet()) {
-            System.out.println(type + " -> " + allocatedRooms.get(type));
+            try {
+                Thread.sleep(100); // simulate processing delay
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 }
 
-/**
- * Application Entry
- * Demonstrates room allocation system.
- * @version 6.1
- */
-public class BookMyStayApp {
+// Main Class
+public class BookMyStayApp{
 
     public static void main(String[] args) {
 
-        System.out.println("====================================");
-        System.out.println("        Book My Stay App v6.1       ");
-        System.out.println("====================================");
-
         RoomInventory inventory = new RoomInventory();
-        BookingRequestQueue queue = new BookingRequestQueue();
-        BookingService bookingService = new BookingService(inventory);
+        BookingQueue queue = new BookingQueue();
 
-        // Simulated booking requests
-        queue.addRequest(new Reservation("Alice", "Single Room"));
-        queue.addRequest(new Reservation("Bob", "Single Room"));
-        queue.addRequest(new Reservation("Charlie", "Single Room"));
-        queue.addRequest(new Reservation("David", "Double Room"));
+        // Simulate multiple guest requests
+        queue.addRequest(new BookingRequest("Alice", "Single"));
+        queue.addRequest(new BookingRequest("Bob", "Single"));
+        queue.addRequest(new BookingRequest("Charlie", "Single")); // extra (should fail)
 
-        System.out.println("\nProcessing Reservations...\n");
+        queue.addRequest(new BookingRequest("David", "Double"));
+        queue.addRequest(new BookingRequest("Eve", "Double"));
 
-        while (!queue.isEmpty()) {
-            Reservation r = queue.getNextRequest();
-            bookingService.processReservation(r);
+        queue.addRequest(new BookingRequest("Frank", "Suite"));
+        queue.addRequest(new BookingRequest("Grace", "Suite")); // extra (should fail)
+
+        // Create multiple threads
+        BookingProcessor t1 = new BookingProcessor("Thread-1", queue, inventory);
+        BookingProcessor t2 = new BookingProcessor("Thread-2", queue, inventory);
+        BookingProcessor t3 = new BookingProcessor("Thread-3", queue, inventory);
+
+        // Start threads
+        t1.start();
+        t2.start();
+        t3.start();
+
+        try {
+            t1.join();
+            t2.join();
+            t3.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
 
-        bookingService.displayAllocations();
-        inventory.displayInventory();
+        // Final state
+        inventory.display();
     }
 }
